@@ -1,0 +1,17 @@
+Things to be done 
+
+1 - Create time graph of vega PE - nifty , vega CE - nifty  wrt time , same for banknifty . 
+2 - add bank nifty to the table too , it's symbol is - 260105 , it's expiry - 09-10-24
+
+
+main - Montu's code
+
+main3_log.js - Montu's code with logs 
+
+greektable  --- Nifty working !!
+
+greektable_trial -- running code with table - good looking table 
+
+greektable_trial1 -- running code with table !!!! 
+
+

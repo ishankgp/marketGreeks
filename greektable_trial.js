@@ -1,26 +1,24 @@
 const WebSocket = require('ws');
-const zlib = require('zlib');
-const moment = require('moment'); // Ensure moment.js is installed: npm install moment
-const convert = require('./convert'); // Make sure this module correctly decodes your data
 const fs = require('fs');
 const path = require('path');
+const output_dir = 'scrapped_data';
+const zlib = require('zlib');
+const convert = require('./convert');
 
-// Create folder for scrapped data if it doesn't exist
-const scrappedDataFolder = path.join(__dirname, 'scrapped_data');
-if (!fs.existsSync(scrappedDataFolder)) {
-    fs.mkdirSync(scrappedDataFolder);
-}
+// Additional modules for table display
+const Table = require('cli-table3'); // For dynamic table display in console
 
-// Configuration
 const serverUrl = 'wss://wsrelay.sensibull.com/broker/1?consumerType=platform_no_plan';
 const customHeaders = {
     "Connection": "upgrade",
     "Upgrade": "websocket",
     "Sec-WebSocket-Accept": "CqbDPpldnDoub1dhmTY9tD+JRDs=",
     "Host": "wsrelay.sensibull.com",
+    "Connection": "Upgrade",
     "Pragma": "no-cache",
     "Cache-Control": "no-cache",
     "User-Agent": "Mozilla/5.0(Macintosh; Intel Mac OS X 10_15_7) AppleWebKit / 537.36(KHTML, like Gecko) Chrome / 129.0.0.0 Safari / 537.36",
+    "Upgrade": "websocket",
     "Origin": "https://web.sensibull.com",
     "Sec-WebSocket-Version": 13,
     "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -29,279 +27,235 @@ const customHeaders = {
     "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits"
 };
 
-// Initialize WebSocket for NIFTY
-const wsNifty = new WebSocket(serverUrl, {
-    headers: {
-        "Origin": "https://web.sensibull.com"
-    }
+// Create output directory if it does not exist
+if (!fs.existsSync(output_dir)) {
+    fs.mkdirSync(output_dir);
+}
+
+const ws = new WebSocket(serverUrl, {
+    headers: customHeaders
 });
 
-// Initialize WebSocket for Bank-NIFTY
-const wsBankNifty = new WebSocket(serverUrl, {
-    headers: {
-        "Origin": "https://web.sensibull.com"
-    }
-});
+// Data structures to hold cumulative values
+let instrumentsData = {}; // Stores data for each instrument
+let initializedAt915 = false; // Flag to check if 9:15 AM data has been initialized
 
-// Data Structures to Store Initial Greeks
-const initialGreeks = {
-    nifty: {
-        calls: {}, // { strike: { vega: Number, theta: Number } }
-        puts: {}   // { strike: { vega: Number, theta: Number } }
-    },
-    bankNifty: {
-        calls: {}, // { strike: { vega: Number, theta: Number } }
-        puts: {}   // { strike: { vega: Number, theta: Number } }
-    }
-};
-
-// Flags and Time Configuration
-let initialGreeksCaptured = {
-    nifty: false,
-    bankNifty: false
-};
-const MARKET_OPEN_TIME = moment().hour(9).minute(15).second(0).millisecond(0);
-
-// Cumulative Differences
-let cumulativeDifferences = {
-    nifty: {
-        calls: { vega: 0, theta: 0 },
-        puts: { vega: 0, theta: 0 }
-    },
-    bankNifty: {
-        calls: { vega: 0, theta: 0 },
-        puts: { vega: 0, theta: 0 }
-    }
-};
-
-// Function to Capture Initial Greeks
-function captureInitialGreeks(optionData, symbol) {
-    console.log(`Capturing initial Greeks for ${symbol}...`);
-    for (const strike in optionData) {
-        const strikeData = optionData[strike];
-
-        // Capture Calls (CE)
-        if (strikeData.CE && strikeData.CE.greeks) {
-            initialGreeks[symbol].calls[strike] = {
-                vega: strikeData.CE.greeks.vega || 0,
-                theta: strikeData.CE.greeks.theta || 0
-            };
-        }
-
-        // Capture Puts (PE)
-        if (strikeData.PE && strikeData.PE.greeks) {
-            initialGreeks[symbol].puts[strike] = {
-                vega: strikeData.PE.greeks.vega || 0,
-                theta: strikeData.PE.greeks.theta || 0
-            };
-        }
-    }
-    console.log(`Initial Greeks captured at market open for ${symbol}.`);
+// Function to check if it's 9:15 AM
+function isTime915() {
+    const now = new Date();
+    return now.getHours() === 9 && now.getMinutes() === 15;
 }
 
-// Function to Calculate and Accumulate Differences
-function calculateAndAccumulateDifferences(optionData, symbol) {
-    console.log(`Calculating and accumulating differences for ${symbol}...`);
-    // Reset cumulative differences
-    cumulativeDifferences[symbol] = {
-        calls: { vega: 0, theta: 0 },
-        puts: { vega: 0, theta: 0 }
-    };
-
-    for (const strike in optionData) {
-        const strikeData = optionData[strike];
-
-        // Calculate for Calls (CE)
-        if (strikeData.CE && strikeData.CE.greeks && initialGreeks[symbol].calls[strike]) {
-            const currentVega = strikeData.CE.greeks.vega || 0;
-            const currentTheta = strikeData.CE.greeks.theta || 0;
-            const vegaDiff = currentVega - initialGreeks[symbol].calls[strike].vega;
-            const thetaDiff = currentTheta - initialGreeks[symbol].calls[strike].theta;
-
-            cumulativeDifferences[symbol].calls.vega += vegaDiff;
-            cumulativeDifferences[symbol].calls.theta += thetaDiff;
-        }
-
-        // Calculate for Puts (PE)
-        if (strikeData.PE && strikeData.PE.greeks && initialGreeks[symbol].puts[strike]) {
-            const currentVega = strikeData.PE.greeks.vega || 0;
-            const currentTheta = strikeData.PE.greeks.theta || 0;
-            const vegaDiff = currentVega - initialGreeks[symbol].puts[strike].vega;
-            const thetaDiff = currentTheta - initialGreeks[symbol].puts[strike].theta;
-
-            cumulativeDifferences[symbol].puts.vega += vegaDiff;
-            cumulativeDifferences[symbol].puts.theta += thetaDiff;
-        }
+// Function to classify strikes
+function classifyStrike(strikePrice, spotPrice, optionType) {
+    if (Math.abs(strikePrice - spotPrice) <= 50) {
+        return 'ATM';
     }
-    console.log(`Cumulative differences for ${symbol}:`, cumulativeDifferences[symbol]);
-
-    // Write cumulative differences to scrapped_data folder
-    const filePath = path.join(scrappedDataFolder, `${symbol}_cumulative_differences.json`);
-    fs.writeFileSync(filePath, JSON.stringify(cumulativeDifferences[symbol], null, 2));
+    if (optionType === 'CE') {
+        return strikePrice > spotPrice ? 'OTM' : 'ITM';
+    } else if (optionType === 'PE') {
+        return strikePrice < spotPrice ? 'OTM' : 'ITM';
+    }
+    return 'UNKNOWN';
 }
 
-// Function to Display the Table
-function displayTable() {
-    console.clear();
-    console.log('-----------------------');
-    console.log('Market Open Time: 9:15 AM');
-    console.log('Current Time:', moment().format('HH:mm:ss'));
-    console.log('-----------------------');
-
-    const tableData = [
-        {
-            Instrument: 'NIFTY',
-            Type: 'Call',
-            Vega: cumulativeDifferences.nifty.calls.vega.toFixed(2),
-            Theta: cumulativeDifferences.nifty.calls.theta.toFixed(2)
-        },
-        {
-            Instrument: 'NIFTY',
-            Type: 'Put',
-            Vega: cumulativeDifferences.nifty.puts.vega.toFixed(2),
-            Theta: cumulativeDifferences.nifty.puts.theta.toFixed(2)
-        },
-        {
-            Instrument: 'Bank-NIFTY',
-            Type: 'Call',
-            Vega: cumulativeDifferences.bankNifty.calls.vega.toFixed(2),
-            Theta: cumulativeDifferences.bankNifty.calls.theta.toFixed(2)
-        },
-        {
-            Instrument: 'Bank-NIFTY',
-            Type: 'Put',
-            Vega: cumulativeDifferences.bankNifty.puts.vega.toFixed(2),
-            Theta: cumulativeDifferences.bankNifty.puts.theta.toFixed(2)
-        }
-    ];
-
-    console.table(tableData);
-}
-
-// Function to Process Option Data
-function processOptionData(optionData, symbol) {
-    console.log(`Processing option data for ${symbol}...`);
-    const currentTime = moment();
-
-    // Check if it's time to capture initial Greeks
-    if (!initialGreeksCaptured[symbol] && currentTime.isSameOrAfter(MARKET_OPEN_TIME)) {
-        console.log(`Capturing initial Greeks for ${symbol} at market open...`);
-        captureInitialGreeks(optionData, symbol);
-        initialGreeksCaptured[symbol] = true;
-    }
-
-    // If initial Greeks are captured, calculate differences
-    if (initialGreeksCaptured[symbol]) {
-        console.log(`Calculating differences for ${symbol}...`);
-        calculateAndAccumulateDifferences(optionData, symbol);
-        displayTable();
-    }
-}
-
-// WebSocket Event Handlers for NIFTY
-wsNifty.on('open', () => {
-    console.log("WebSocket connection for NIFTY opened.");
-    const message = {
+ws.on('open', () => {
+    let message = {
         "msgCommand": "subscribe",
         "dataSource": "option-chain",
         "brokerId": 1,
-        "tokens": [], // Subscribing to NIFTY
+        "tokens": [],
         "underlyingExpiry": [
             {
-                "underlying": 256265, // NIFTY
+                "underlying": 256265,
                 "expiry": "2024-10-10"
             }
         ],
         "uniqueId": ""
     };
-    wsNifty.send(JSON.stringify(message));
-    console.log("Connected to WebSocket and subscribed to NIFTY option chain data.");
+    const msg = JSON.stringify(message);
+    ws.send(msg);
+    console.log("Connected to WebSocket server.");
 });
 
-wsNifty.on("message", (data) => {
-    console.log("Received message for NIFTY.");
-    // Decode the incoming data
-    let decodedData;
-    try {
-        decodedData = convert.decodeData(data); // Ensure this handles decompression if needed
-        console.log("Decoded data for NIFTY:", decodedData);
-        // Write raw message data to scrapped_data folder with timestamp
-        const timestamp = moment().format('YYYYMMDD_HHmmss_SSS');
-        const filePath = path.join(scrappedDataFolder, `NIFTY_${timestamp}.json`);
-        fs.writeFileSync(filePath, JSON.stringify(decodedData, null, 2));
-    } catch (error) {
-        console.error("Error decoding data for NIFTY:", error);
+ws.on("message", (data) => {
+    console.log("Received data from WebSocket");
+
+    // Decode the received data
+    let _payload = convert.decodeData(data);
+    // console.log(JSON.stringify(_payload, null, 2));
+
+    // Store the received data into a file for further analysis
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.join(output_dir, `websocket_output_${timestamp}.json`);
+    fs.writeFile(filePath, JSON.stringify(_payload, null, 2), (err) => {
+        if (err) {
+            console.error('Error writing to file', err);
+        } else {
+            console.log('Data successfully saved to', filePath);
+        }
+    });
+
+    // Begin processing for cumulative Vega and Theta
+    processData(_payload);
+});
+
+ws.on('close', () => {
+    console.log('Connection closed');
+});
+
+ws.on('error', (error) => {
+    console.error(`WebSocket error: ${error.message} ${error}`);
+});
+
+// Function to process the data and update cumulative values
+function processData(payload) {
+    const data = payload.payload?.data;
+    if (!data) {
+        console.error('No data in payload.');
         return;
     }
 
-    // Process NIFTY data
-    const niftyChainData = decodedData?.payload?.data?.['256265']?.['2024-10-10']?.chain;
-    if (niftyChainData && typeof niftyChainData === 'object') {
-        console.log("Processing NIFTY chain data...");
-        processOptionData(niftyChainData, 'nifty');
-    } else {
-        console.log("No valid chain data received for NIFTY.");
-    }
-});
+    for (let token in data) {
+        for (let expiry in data[token]) {
+            const instrumentToken = token;
+            const instrumentName = 'Nifty'; // Assuming Nifty for now
+            const expiryDate = expiry;
+            const instrumentKey = `${instrumentToken}_${expiryDate}`;
 
-wsNifty.on('close', () => {
-    console.log('WebSocket connection for NIFTY closed.');
-});
-
-wsNifty.on('error', (error) => {
-    console.error(`WebSocket error for NIFTY: ${error.message}`, error);
-});
-
-// WebSocket Event Handlers for Bank-NIFTY
-wsBankNifty.on('open', () => {
-    console.log("WebSocket connection for Bank-NIFTY opened.");
-    const message = {
-        "msgCommand": "subscribe",
-        "dataSource": "option-chain",
-        "brokerId": 1,
-        "tokens": [], // Subscribing to Bank-NIFTY
-        "underlyingExpiry": [
-            {
-                "underlying": 260105, // Bank-NIFTY
-                "expiry": "2024-10-09"
+            // Initialize data structures if not present
+            if (!instrumentsData[instrumentKey]) {
+                instrumentsData[instrumentKey] = {
+                    instrumentName: instrumentName,
+                    token: instrumentToken,
+                    expiry: expiryDate,
+                    calls: {
+                        vega_915: 0,
+                        theta_915: 0,
+                        vega_current: 0,
+                        theta_current: 0,
+                        vega_diff: 0,
+                        theta_diff: 0
+                    },
+                    puts: {
+                        vega_915: 0,
+                        theta_915: 0,
+                        vega_current: 0,
+                        theta_current: 0,
+                        vega_diff: 0,
+                        theta_diff: 0
+                    },
+                    atm_strike: 0,
+                    spot_price: 0
+                };
             }
+
+            const instrumentData = instrumentsData[instrumentKey];
+            const chainData = data[token][expiry]['chain'];
+            const atmStrike = data[token][expiry]['atm_strike'];
+
+            // Update spot price and atm_strike
+            instrumentData.atm_strike = atmStrike;
+            instrumentData.spot_price = atmStrike; // Assuming spot price ≈ atm_strike
+
+            // Initialize cumulative sums
+            let callsVegaSum = 0;
+            let callsThetaSum = 0;
+            let putsVegaSum = 0;
+            let putsThetaSum = 0;
+
+            // Process each strike
+            for (let strike in chainData) {
+                const strikePrice = parseFloat(strike);
+
+                // Classify strike for Calls
+                const callClassification = classifyStrike(strikePrice, instrumentData.spot_price, 'CE');
+                if (callClassification === 'ATM' || callClassification === 'OTM') {
+                    const callData = chainData[strike]['CE'];
+                    if (callData && callData.greeks) {
+                        const vega = callData.greeks.vega || 0;
+                        const theta = callData.greeks.theta || 0;
+                        callsVegaSum += vega;
+                        callsThetaSum += theta;
+                    }
+                }
+
+                // Classify strike for Puts
+                const putClassification = classifyStrike(strikePrice, instrumentData.spot_price, 'PE');
+                if (putClassification === 'ATM' || putClassification === 'OTM') {
+                    const putData = chainData[strike]['PE'];
+                    if (putData && putData.greeks) {
+                        const vega = putData.greeks.vega || 0;
+                        const theta = putData.greeks.theta || 0;
+                        putsVegaSum += vega;
+                        putsThetaSum += theta;
+                    }
+                }
+            }
+
+            // Initialize 9:15 AM values if not already done
+            if (!initializedAt915 && isTime915()) {
+                instrumentData.calls.vega_915 = callsVegaSum;
+                instrumentData.calls.theta_915 = callsThetaSum;
+                instrumentData.puts.vega_915 = putsVegaSum;
+                instrumentData.puts.theta_915 = putsThetaSum;
+                initializedAt915 = true;
+            } else if (!initializedAt915 && !isTime915()) {
+                // If it's not 9:15 AM and values are not initialized, set to zero
+                instrumentData.calls.vega_915 = instrumentData.calls.vega_915 || 0;
+                instrumentData.calls.theta_915 = instrumentData.calls.theta_915 || 0;
+                instrumentData.puts.vega_915 = instrumentData.puts.vega_915 || 0;
+                instrumentData.puts.theta_915 = instrumentData.puts.theta_915 || 0;
+            }
+
+            // Update current values and differences
+            instrumentData.calls.vega_current = callsVegaSum;
+            instrumentData.calls.theta_current = callsThetaSum;
+            instrumentData.calls.vega_diff = callsVegaSum - instrumentData.calls.vega_915;
+            instrumentData.calls.theta_diff = callsThetaSum - instrumentData.calls.theta_915;
+
+            instrumentData.puts.vega_current = putsVegaSum;
+            instrumentData.puts.theta_current = putsThetaSum;
+            instrumentData.puts.vega_diff = putsVegaSum - instrumentData.puts.vega_915;
+            instrumentData.puts.theta_diff = putsThetaSum - instrumentData.puts.theta_915;
+
+            // Display the dynamic table
+            displayTable(instrumentData);
+        }
+    }
+}
+
+// Function to display the dynamic table
+function displayTable(instrumentData) {
+    const table = new Table({
+        head: ['Instrument', 'Option Type', 'Vega @9:15 AM', 'Vega @Now', 'Vega Δ', 'Theta @9:15 AM', 'Theta @Now', 'Theta Δ'],
+        colWidths: [15, 12, 15, 15, 10, 15, 15, 10]
+    });
+
+    // Add Calls data
+    table.push(
+        [
+            instrumentData.instrumentName,
+            'Calls',
+            instrumentData.calls.vega_915.toFixed(2),
+            instrumentData.calls.vega_current.toFixed(2),
+            instrumentData.calls.vega_diff.toFixed(2),
+            instrumentData.calls.theta_915.toFixed(2),
+            instrumentData.calls.theta_current.toFixed(2),
+            instrumentData.calls.theta_diff.toFixed(2)
         ],
-        "uniqueId": ""
-    };
-    wsBankNifty.send(JSON.stringify(message));
-    console.log("Connected to WebSocket and subscribed to Bank-NIFTY option chain data.");
-});
+        // Add Puts data
+        [
+            instrumentData.instrumentName,
+            'Puts',
+            instrumentData.puts.vega_915.toFixed(2),
+            instrumentData.puts.vega_current.toFixed(2),
+            instrumentData.puts.vega_diff.toFixed(2),
+            instrumentData.puts.theta_915.toFixed(2),
+            instrumentData.puts.theta_current.toFixed(2),
+            instrumentData.puts.theta_diff.toFixed(2)
+        ]
+    );
 
-wsBankNifty.on("message", (data) => {
-    console.log("Received message for Bank-NIFTY.");
-    // Decode the incoming data
-    let decodedData;
-    try {
-        decodedData = convert.decodeData(data); // Ensure this handles decompression if needed
-        console.log("Decoded data for Bank-NIFTY:", decodedData);
-        // Write raw message data to scrapped_data folder with timestamp
-        const timestamp = moment().format('YYYYMMDD_HHmmss_SSS');
-        const filePath = path.join(scrappedDataFolder, `BankNIFTY_${timestamp}.json`);
-        fs.writeFileSync(filePath, JSON.stringify(decodedData, null, 2));
-    } catch (error) {
-        console.error("Error decoding data for Bank-NIFTY:", error);
-        return;
-    }
-
-    // Process Bank-NIFTY data
-    const bankNiftyChainData = decodedData?.payload?.data?.['260105']?.['2024-10-09']?.chain;
-    if (bankNiftyChainData && typeof bankNiftyChainData === 'object') {
-        console.log("Processing Bank-NIFTY chain data...");
-        processOptionData(bankNiftyChainData, 'bankNifty');
-    } else {
-        console.log("No valid chain data received for Bank-NIFTY.");
-    }
-});
-
-wsBankNifty.on('close', () => {
-    console.log('WebSocket connection for Bank-NIFTY closed.');
-});
-
-wsBankNifty.on('error', (error) => {
-    console.error(`WebSocket error for Bank-NIFTY: ${error.message}`, error);
-});
+    console.log(table.toString());
+}
