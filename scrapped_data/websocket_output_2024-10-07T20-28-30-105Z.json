@@ -1,7 +1,0 @@
-{
-  "token": "PING",
-  "expiry": "CUSTOM_PING",
-  "kind": 253,
-  "packetId": 253,
-  "payload": {}
-}

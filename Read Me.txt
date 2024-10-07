@@ -1,0 +1,20 @@
+Things to be done 
+
+1 - Create time graph of vega PE - nifty , vega CE - nifty  wrt time , same for banknifty . 
+2 - add bank nifty to the table too , it's symbol is - 260105 , it's expiry - 09-10-24
+
+
+main - Montu's code
+
+main3_log.js - Montu's code with logs 
+
+greektable  --- Nifty table generation , wrong as it wasn't able to fetch greeks of strikes !!
+
+greektable_trial -- running code with table - good looking table but wrong 
+
+greektable_trial1 -- running code with table but wrong data
+
+
+greektable_trial2 -- has the right table with right data!!!! Check whether it's able to store the 9.15 am candle !!
+
+greektable_trial3 -- combine both nifty and bank nifty for this  + check 9.15 am code logic  + create another column for timestamp in hh;+:mm format 

@@ -164,32 +164,38 @@ function processData(payload, timestamp) {
             let putsVegaSum = 0;
             let putsThetaSum = 0;
 
+            console.log(`Processing chain data for token: ${token}, expiry: ${expiry}`);
+            console.log(`ATM Strike: ${atmStrike}`);
+
             // Process each strike
             for (let strike in chainData) {
                 const strikePrice = parseFloat(strike);
+                const strikeData = chainData[strike];
 
-                // Classify strike for Calls
-                const callClassification = classifyStrike(strikePrice, instrumentData.spot_price, 'CE');
-                if (callClassification === 'ATM' || callClassification === 'OTM') {
-                    const callData = chainData[strike]['CE'];
-                    if (callData && callData.greeks) {
-                        const vega = callData.greeks.vega || 0;
-                        const theta = callData.greeks.theta || 0;
+                if (strikeData.greeks) {
+                    console.log(`Greeks for Strike ${strikePrice}:`, strikeData.greeks);
+                    const vega = parseFloat(strikeData.greeks.vega) || 0;
+                    const theta = parseFloat(strikeData.greeks.theta) || 0;
+
+                    // Classify strike for Calls
+                    const callClassification = classifyStrike(strikePrice, instrumentData.spot_price, 'CE');
+                    console.log(`Strike Price: ${strikePrice}, Classification for Calls: ${callClassification}`);
+                    if (callClassification === 'ATM' || callClassification === 'OTM') {
                         callsVegaSum += vega;
                         callsThetaSum += theta;
+                        console.log(`Call Strike: ${strikePrice}, Vega: ${vega}, Theta: ${theta}, Cumulative Vega: ${callsVegaSum}, Cumulative Theta: ${callsThetaSum}`);
                     }
-                }
 
-                // Classify strike for Puts
-                const putClassification = classifyStrike(strikePrice, instrumentData.spot_price, 'PE');
-                if (putClassification === 'ATM' || putClassification === 'OTM') {
-                    const putData = chainData[strike]['PE'];
-                    if (putData && putData.greeks) {
-                        const vega = putData.greeks.vega || 0;
-                        const theta = putData.greeks.theta || 0;
+                    // Classify strike for Puts
+                    const putClassification = classifyStrike(strikePrice, instrumentData.spot_price, 'PE');
+                    console.log(`Strike Price: ${strikePrice}, Classification for Puts: ${putClassification}`);
+                    if (putClassification === 'ATM' || putClassification === 'OTM') {
                         putsVegaSum += vega;
                         putsThetaSum += theta;
+                        console.log(`Put Strike: ${strikePrice}, Vega: ${vega}, Theta: ${theta}, Cumulative Vega: ${putsVegaSum}, Cumulative Theta: ${putsThetaSum}`);
                     }
+                } else {
+                    console.log(`No Greeks available for Strike ${strikePrice}`);
                 }
             }
 
@@ -200,12 +206,13 @@ function processData(payload, timestamp) {
                 instrumentData.puts.vega_915 = putsVegaSum;
                 instrumentData.puts.theta_915 = putsThetaSum;
                 initializedAt915 = true;
+                console.log(`Initialized 9:15 AM values for token: ${token}`);
             } else if (!initializedAt915 && !isTime915()) {
                 // If it's not 9:15 AM and values are not initialized, set them to zero
-                instrumentData.calls.vega_915 = 0;
-                instrumentData.calls.theta_915 = 0;
-                instrumentData.puts.vega_915 = 0;
-                instrumentData.puts.theta_915 = 0;
+                instrumentData.calls.vega_915 = instrumentData.calls.vega_915 || 0;
+                instrumentData.calls.theta_915 = instrumentData.calls.theta_915 || 0;
+                instrumentData.puts.vega_915 = instrumentData.puts.vega_915 || 0;
+                instrumentData.puts.theta_915 = instrumentData.puts.theta_915 || 0;
             }
 
             // Update current values and differences
@@ -218,6 +225,10 @@ function processData(payload, timestamp) {
             instrumentData.puts.theta_current = putsThetaSum;
             instrumentData.puts.vega_diff = putsVegaSum - instrumentData.puts.vega_915;
             instrumentData.puts.theta_diff = putsThetaSum - instrumentData.puts.theta_915;
+
+            console.log(`Current Vega and Theta values for token: ${token}`);
+            console.log(`Calls - Vega: ${instrumentData.calls.vega_current}, Theta: ${instrumentData.calls.theta_current}`);
+            console.log(`Puts - Vega: ${instrumentData.puts.vega_current}, Theta: ${instrumentData.puts.theta_current}`);
 
             // Display the dynamic table with timestamp
             displayTable(instrumentData, timestamp);
