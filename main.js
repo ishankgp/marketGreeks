@@ -39,7 +39,7 @@ ws.on('open', () => {
         "underlyingExpiry": [
             {
                 "underlying": 256265,
-                "expiry": "2024-10-03"
+                "expiry": "2024-10-10"
             }
         ],
         "uniqueId": ""
