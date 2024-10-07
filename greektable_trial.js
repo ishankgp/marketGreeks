@@ -2,6 +2,14 @@ const WebSocket = require('ws');
 const zlib = require('zlib');
 const moment = require('moment'); // Ensure moment.js is installed: npm install moment
 const convert = require('./convert'); // Make sure this module correctly decodes your data
+const fs = require('fs');
+const path = require('path');
+
+// Create folder for scrapped data if it doesn't exist
+const scrappedDataFolder = path.join(__dirname, 'scrapped_data');
+if (!fs.existsSync(scrappedDataFolder)) {
+    fs.mkdirSync(scrappedDataFolder);
+}
 
 // Configuration
 const serverUrl = 'wss://wsrelay.sensibull.com/broker/1?consumerType=platform_no_plan';
@@ -68,6 +76,7 @@ let cumulativeDifferences = {
 
 // Function to Capture Initial Greeks
 function captureInitialGreeks(optionData, symbol) {
+    console.log(`Capturing initial Greeks for ${symbol}...`);
     for (const strike in optionData) {
         const strikeData = optionData[strike];
 
@@ -92,6 +101,7 @@ function captureInitialGreeks(optionData, symbol) {
 
 // Function to Calculate and Accumulate Differences
 function calculateAndAccumulateDifferences(optionData, symbol) {
+    console.log(`Calculating and accumulating differences for ${symbol}...`);
     // Reset cumulative differences
     cumulativeDifferences[symbol] = {
         calls: { vega: 0, theta: 0 },
@@ -123,6 +133,11 @@ function calculateAndAccumulateDifferences(optionData, symbol) {
             cumulativeDifferences[symbol].puts.theta += thetaDiff;
         }
     }
+    console.log(`Cumulative differences for ${symbol}:`, cumulativeDifferences[symbol]);
+
+    // Write cumulative differences to scrapped_data folder
+    const filePath = path.join(scrappedDataFolder, `${symbol}_cumulative_differences.json`);
+    fs.writeFileSync(filePath, JSON.stringify(cumulativeDifferences[symbol], null, 2));
 }
 
 // Function to Display the Table
@@ -165,16 +180,19 @@ function displayTable() {
 
 // Function to Process Option Data
 function processOptionData(optionData, symbol) {
+    console.log(`Processing option data for ${symbol}...`);
     const currentTime = moment();
 
     // Check if it's time to capture initial Greeks
     if (!initialGreeksCaptured[symbol] && currentTime.isSameOrAfter(MARKET_OPEN_TIME)) {
+        console.log(`Capturing initial Greeks for ${symbol} at market open...`);
         captureInitialGreeks(optionData, symbol);
         initialGreeksCaptured[symbol] = true;
     }
 
     // If initial Greeks are captured, calculate differences
     if (initialGreeksCaptured[symbol]) {
+        console.log(`Calculating differences for ${symbol}...`);
         calculateAndAccumulateDifferences(optionData, symbol);
         displayTable();
     }
@@ -182,6 +200,7 @@ function processOptionData(optionData, symbol) {
 
 // WebSocket Event Handlers for NIFTY
 wsNifty.on('open', () => {
+    console.log("WebSocket connection for NIFTY opened.");
     const message = {
         "msgCommand": "subscribe",
         "dataSource": "option-chain",
@@ -200,19 +219,28 @@ wsNifty.on('open', () => {
 });
 
 wsNifty.on("message", (data) => {
+    console.log("Received message for NIFTY.");
     // Decode the incoming data
     let decodedData;
     try {
         decodedData = convert.decodeData(data); // Ensure this handles decompression if needed
+        console.log("Decoded data for NIFTY:", decodedData);
+        // Write raw message data to scrapped_data folder with timestamp
+        const timestamp = moment().format('YYYYMMDD_HHmmss_SSS');
+        const filePath = path.join(scrappedDataFolder, `NIFTY_${timestamp}.json`);
+        fs.writeFileSync(filePath, JSON.stringify(decodedData, null, 2));
     } catch (error) {
-        console.error("Error decoding data:", error);
+        console.error("Error decoding data for NIFTY:", error);
         return;
     }
 
     // Process NIFTY data
     const niftyChainData = decodedData?.payload?.data?.['256265']?.['2024-10-10']?.chain;
     if (niftyChainData && typeof niftyChainData === 'object') {
+        console.log("Processing NIFTY chain data...");
         processOptionData(niftyChainData, 'nifty');
+    } else {
+        console.log("No valid chain data received for NIFTY.");
     }
 });
 
@@ -226,6 +254,7 @@ wsNifty.on('error', (error) => {
 
 // WebSocket Event Handlers for Bank-NIFTY
 wsBankNifty.on('open', () => {
+    console.log("WebSocket connection for Bank-NIFTY opened.");
     const message = {
         "msgCommand": "subscribe",
         "dataSource": "option-chain",
@@ -244,19 +273,28 @@ wsBankNifty.on('open', () => {
 });
 
 wsBankNifty.on("message", (data) => {
+    console.log("Received message for Bank-NIFTY.");
     // Decode the incoming data
     let decodedData;
     try {
         decodedData = convert.decodeData(data); // Ensure this handles decompression if needed
+        console.log("Decoded data for Bank-NIFTY:", decodedData);
+        // Write raw message data to scrapped_data folder with timestamp
+        const timestamp = moment().format('YYYYMMDD_HHmmss_SSS');
+        const filePath = path.join(scrappedDataFolder, `BankNIFTY_${timestamp}.json`);
+        fs.writeFileSync(filePath, JSON.stringify(decodedData, null, 2));
     } catch (error) {
-        console.error("Error decoding data:", error);
+        console.error("Error decoding data for Bank-NIFTY:", error);
         return;
     }
 
     // Process Bank-NIFTY data
     const bankNiftyChainData = decodedData?.payload?.data?.['260105']?.['2024-10-09']?.chain;
     if (bankNiftyChainData && typeof bankNiftyChainData === 'object') {
+        console.log("Processing Bank-NIFTY chain data...");
         processOptionData(bankNiftyChainData, 'bankNifty');
+    } else {
+        console.log("No valid chain data received for Bank-NIFTY.");
     }
 });
 

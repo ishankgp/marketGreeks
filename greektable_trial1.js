@@ -1,10 +1,9 @@
-// Import required modules
 const WebSocket = require('ws');
 const zlib = require('zlib');
 const moment = require('moment'); // Ensure moment.js is installed: npm install moment
 const convert = require('./convert'); // Make sure this module correctly decodes your data
 
-// Configuration: WebSocket server URL and custom headers
+// Configuration
 const serverUrl = 'wss://wsrelay.sensibull.com/broker/1?consumerType=platform_no_plan';
 const customHeaders = {
     "Connection": "upgrade",
@@ -22,33 +21,40 @@ const customHeaders = {
     "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits"
 };
 
-// Initialize WebSocket connection to server
-const ws = new WebSocket(serverUrl, {
+// Initialize WebSocket for NIFTY
+const wsNifty = new WebSocket(serverUrl, {
     headers: {
         "Origin": "https://web.sensibull.com"
     }
 });
 
-// Data Structures to store initial Greeks for both Calls (CE) and Puts (PE)
+// Initialize WebSocket for Bank-NIFTY
+const wsBankNifty = new WebSocket(serverUrl, {
+    headers: {
+        "Origin": "https://web.sensibull.com"
+    }
+});
+
+// Data Structures to Store Initial Greeks
 const initialGreeks = {
     nifty: {
-        calls: {},
-        puts: {}
+        calls: {}, // { strike: { vega: Number, theta: Number } }
+        puts: {}   // { strike: { vega: Number, theta: Number } }
     },
     bankNifty: {
-        calls: {},
-        puts: {}
+        calls: {}, // { strike: { vega: Number, theta: Number } }
+        puts: {}   // { strike: { vega: Number, theta: Number } }
     }
 };
 
-// Flags and Time Configuration for market open time
-let hasCapturedInitialGreeks = {
+// Flags and Time Configuration
+let initialGreeksCaptured = {
     nifty: false,
     bankNifty: false
 };
 const MARKET_OPEN_TIME = moment().hour(9).minute(15).second(0).millisecond(0);
 
-// Cumulative differences for calls and puts
+// Cumulative Differences
 let cumulativeDifferences = {
     nifty: {
         calls: { vega: 0, theta: 0 },
@@ -60,8 +66,9 @@ let cumulativeDifferences = {
     }
 };
 
-// Function to capture initial Greeks at market open
+// Function to Capture Initial Greeks
 function captureInitialGreeks(optionData, symbol) {
+    console.log(`Capturing initial Greeks for ${symbol}...`);
     for (const strike in optionData) {
         const strikeData = optionData[strike];
 
@@ -84,12 +91,19 @@ function captureInitialGreeks(optionData, symbol) {
     console.log(`Initial Greeks captured at market open for ${symbol}.`);
 }
 
-// Function to calculate differences between current and initial Greeks and accumulate them
+// Function to Calculate and Accumulate Differences
 function calculateAndAccumulateDifferences(optionData, symbol) {
+    console.log(`Calculating and accumulating differences for ${symbol}...`);
+    // Reset cumulative differences
+    cumulativeDifferences[symbol] = {
+        calls: { vega: 0, theta: 0 },
+        puts: { vega: 0, theta: 0 }
+    };
+
     for (const strike in optionData) {
         const strikeData = optionData[strike];
 
-        // Calculate differences for Calls (CE)
+        // Calculate for Calls (CE)
         if (strikeData.CE && strikeData.CE.greeks && initialGreeks[symbol].calls[strike]) {
             const currentVega = strikeData.CE.greeks.vega || 0;
             const currentTheta = strikeData.CE.greeks.theta || 0;
@@ -100,7 +114,7 @@ function calculateAndAccumulateDifferences(optionData, symbol) {
             cumulativeDifferences[symbol].calls.theta += thetaDiff;
         }
 
-        // Calculate differences for Puts (PE)
+        // Calculate for Puts (PE)
         if (strikeData.PE && strikeData.PE.greeks && initialGreeks[symbol].puts[strike]) {
             const currentVega = strikeData.PE.greeks.vega || 0;
             const currentTheta = strikeData.PE.greeks.theta || 0;
@@ -111,118 +125,163 @@ function calculateAndAccumulateDifferences(optionData, symbol) {
             cumulativeDifferences[symbol].puts.theta += thetaDiff;
         }
     }
+    console.log(`Cumulative differences for ${symbol}:`, cumulativeDifferences[symbol]);
 }
 
-// Function to display a summary table with cumulative differences
+// Function to Display the Table
 function displayTable() {
     console.clear();
     console.log('-----------------------');
-    console.log('Instrument: NIFTY (256265), BANK NIFTY (260105)');
     console.log('Market Open Time: 9:15 AM');
     console.log('Current Time:', moment().format('HH:mm:ss'));
     console.log('-----------------------');
 
     const tableData = [
         {
-            Type: 'Nifty Call',
-            Vega: cumulativeDifferences.nifty.calls.vega !== 0 ? cumulativeDifferences.nifty.calls.vega.toFixed(2) : 'No Data',
-            Theta: cumulativeDifferences.nifty.calls.theta !== 0 ? cumulativeDifferences.nifty.calls.theta.toFixed(2) : 'No Data'
+            Instrument: 'NIFTY',
+            Type: 'Call',
+            Vega: cumulativeDifferences.nifty.calls.vega.toFixed(2),
+            Theta: cumulativeDifferences.nifty.calls.theta.toFixed(2)
         },
         {
-            Type: 'Nifty Put',
-            Vega: cumulativeDifferences.nifty.puts.vega !== 0 ? cumulativeDifferences.nifty.puts.vega.toFixed(2) : 'No Data',
-            Theta: cumulativeDifferences.nifty.puts.theta !== 0 ? cumulativeDifferences.nifty.puts.theta.toFixed(2) : 'No Data'
+            Instrument: 'NIFTY',
+            Type: 'Put',
+            Vega: cumulativeDifferences.nifty.puts.vega.toFixed(2),
+            Theta: cumulativeDifferences.nifty.puts.theta.toFixed(2)
         },
         {
-            Type: 'Bank Nifty Call',
-            Vega: cumulativeDifferences.bankNifty.calls.vega !== 0 ? cumulativeDifferences.bankNifty.calls.vega.toFixed(2) : 'No Data',
-            Theta: cumulativeDifferences.bankNifty.calls.theta !== 0 ? cumulativeDifferences.bankNifty.calls.theta.toFixed(2) : 'No Data'
+            Instrument: 'Bank-NIFTY',
+            Type: 'Call',
+            Vega: cumulativeDifferences.bankNifty.calls.vega.toFixed(2),
+            Theta: cumulativeDifferences.bankNifty.calls.theta.toFixed(2)
         },
         {
-            Type: 'Bank Nifty Put',
-            Vega: cumulativeDifferences.bankNifty.puts.vega !== 0 ? cumulativeDifferences.bankNifty.puts.vega.toFixed(2) : 'No Data',
-            Theta: cumulativeDifferences.bankNifty.puts.theta !== 0 ? cumulativeDifferences.bankNifty.puts.theta.toFixed(2) : 'No Data'
+            Instrument: 'Bank-NIFTY',
+            Type: 'Put',
+            Vega: cumulativeDifferences.bankNifty.puts.vega.toFixed(2),
+            Theta: cumulativeDifferences.bankNifty.puts.theta.toFixed(2)
         }
     ];
 
     console.table(tableData);
 }
 
-// Function to process option data received from WebSocket
+// Function to Process Option Data
 function processOptionData(optionData, symbol) {
+    console.log(`Processing option data for ${symbol}...`);
     const currentTime = moment();
 
-    // Capture initial Greeks at market open
-    if (!hasCapturedInitialGreeks[symbol] && currentTime.isSameOrAfter(MARKET_OPEN_TIME)) {
+    // Check if it's time to capture initial Greeks
+    if (!initialGreeksCaptured[symbol] && currentTime.isSameOrAfter(MARKET_OPEN_TIME)) {
+        console.log(`Capturing initial Greeks for ${symbol} at market open...`);
         captureInitialGreeks(optionData, symbol);
-        hasCapturedInitialGreeks[symbol] = true;
+        initialGreeksCaptured[symbol] = true;
     }
 
-    // Calculate and accumulate differences if initial Greeks are captured
-    if (hasCapturedInitialGreeks[symbol]) {
+    // If initial Greeks are captured, calculate differences
+    if (initialGreeksCaptured[symbol]) {
+        console.log(`Calculating differences for ${symbol}...`);
         calculateAndAccumulateDifferences(optionData, symbol);
         displayTable();
     }
 }
 
-// WebSocket event handlers
-ws.on('open', () => {
-    // Subscription message to WebSocket for option chain data
+// WebSocket Event Handlers for NIFTY
+wsNifty.on('open', () => {
+    console.log("WebSocket connection for NIFTY opened.");
     const message = {
         "msgCommand": "subscribe",
         "dataSource": "option-chain",
         "brokerId": 1,
-        "tokens": [], // Subscribing to NIFTY and BANK NIFTY
+        "tokens": [], // Subscribing to NIFTY
         "underlyingExpiry": [
             {
-                "underlying": 256265,
+                "underlying": 256265, // NIFTY
                 "expiry": "2024-10-10"
-            },
+            }
+        ],
+        "uniqueId": ""
+    };
+    wsNifty.send(JSON.stringify(message));
+    console.log("Connected to WebSocket and subscribed to NIFTY option chain data.");
+});
+
+wsNifty.on("message", (data) => {
+    console.log("Received message for NIFTY.");
+    // Decode the incoming data
+    let decodedData;
+    try {
+        decodedData = convert.decodeData(data); // Ensure this handles decompression if needed
+        console.log("Decoded data for NIFTY:", decodedData);
+    } catch (error) {
+        console.error("Error decoding data for NIFTY:", error);
+        return;
+    }
+
+    // Process NIFTY data
+    const niftyChainData = decodedData?.payload?.data?.['256265']?.['2024-10-10']?.chain;
+    if (niftyChainData && typeof niftyChainData === 'object') {
+        console.log("Processing NIFTY chain data...");
+        processOptionData(niftyChainData, 'nifty');
+    } else {
+        console.log("No valid chain data received for NIFTY.");
+    }
+});
+
+wsNifty.on('close', () => {
+    console.log('WebSocket connection for NIFTY closed.');
+});
+
+wsNifty.on('error', (error) => {
+    console.error(`WebSocket error for NIFTY: ${error.message}`, error);
+});
+
+// WebSocket Event Handlers for Bank-NIFTY
+wsBankNifty.on('open', () => {
+    console.log("WebSocket connection for Bank-NIFTY opened.");
+    const message = {
+        "msgCommand": "subscribe",
+        "dataSource": "option-chain",
+        "brokerId": 1,
+        "tokens": [], // Subscribing to Bank-NIFTY
+        "underlyingExpiry": [
             {
-                "underlying": 260105,
+                "underlying": 260105, // Bank-NIFTY
                 "expiry": "2024-10-09"
             }
         ],
         "uniqueId": ""
     };
-    ws.send(JSON.stringify(message));
-    console.log("Connected to WebSocket and subscribed to option chain data.");
+    wsBankNifty.send(JSON.stringify(message));
+    console.log("Connected to WebSocket and subscribed to Bank-NIFTY option chain data.");
 });
 
-// Handle incoming WebSocket messages
-ws.on("message", (data) => {
+wsBankNifty.on("message", (data) => {
+    console.log("Received message for Bank-NIFTY.");
     // Decode the incoming data
     let decodedData;
     try {
         decodedData = convert.decodeData(data); // Ensure this handles decompression if needed
+        console.log("Decoded data for Bank-NIFTY:", decodedData);
     } catch (error) {
-        console.error("Error decoding data:", error);
+        console.error("Error decoding data for Bank-NIFTY:", error);
         return;
     }
 
-    // Navigate to the 'chain' data for NIFTY and BANK NIFTY
-    const niftyChainData = decodedData?.payload?.data?.['256265']?.['2024-10-10']?.chain;
+    // Process Bank-NIFTY data
     const bankNiftyChainData = decodedData?.payload?.data?.['260105']?.['2024-10-09']?.chain;
-
-    if (niftyChainData && typeof niftyChainData === 'object') {
-        processOptionData(niftyChainData, 'nifty');
-    } else {
-        console.log("Received message does not contain valid NIFTY chain data.");
-    }
-
     if (bankNiftyChainData && typeof bankNiftyChainData === 'object') {
+        console.log("Processing Bank-NIFTY chain data...");
         processOptionData(bankNiftyChainData, 'bankNifty');
     } else {
-        console.log("Received message does not contain valid BANK NIFTY chain data.");
+        console.log("No valid chain data received for Bank-NIFTY.");
     }
 });
 
-// Handle WebSocket close event
-ws.on('close', () => {
-    console.log('WebSocket connection closed.');
+wsBankNifty.on('close', () => {
+    console.log('WebSocket connection for Bank-NIFTY closed.');
 });
 
-// Handle WebSocket error event
-ws.on('error', (error) => {
-    console.error(`WebSocket error: ${error.message}`, error);
+wsBankNifty.on('error', (error) => {
+    console.error(`WebSocket error for Bank-NIFTY: ${error.message}`, error);
 });
