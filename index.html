@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Option Data Dashboard</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        table, th, td {
+            border: 1px solid black;
+        }
+        th, td {
+            padding: 8px;
+            text-align: center;
+        }
+        #chartContainer {
+            width: 100%;
+            height: 400px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>Option Data Dashboard</h1>
+    <table id="dataTable">
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Instrument</th>
+                <th>Option Type</th>
+                <th>Vega @ <span id="earliestVegaTimestamp">Earliest</span></th>
+                <th>Vega @Now</th>
+                <th>Vega Δ</th>
+                <th>Theta @ <span id="earliestThetaTimestamp">Earliest</span></th>
+                <th>Theta @Now</th>
+                <th>Theta Δ</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <table id="summaryTable">
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Instrument</th>
+                <th>Option Type</th>
+                <th>Vega Δ</th>
+                <th>Theta Δ</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <div id="chartContainer">
+        <canvas id="vegaChart"></canvas>
+    </div>
+
+    <script>
+        let chart;
+        let chartData = {
+            labels: [],
+            datasets: [
+                {
+                    label: 'Delta Vega (Calls)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    data: [],
+                    fill: false
+                },
+                {
+                    label: 'Delta Vega (Puts)',
+                    borderColor: 'rgba(192, 75, 75, 1)',
+                    backgroundColor: 'rgba(192, 75, 75, 0.2)',
+                    data: [],
+                    fill: false
+                }
+            ]
+        };
+
+        async function fetchData() {
+            const response = await fetch('/data');
+            const data = await response.json();
+            const tbody = document.querySelector('#dataTable tbody');
+            const summaryTbody = document.querySelector('#summaryTable tbody');
+            tbody.innerHTML = '';
+            summaryTbody.innerHTML = '';
+
+            let earliestTimestamp = 'Earliest';
+            for (const key in data) {
+                const instrument = data[key];
+                if (instrument.earliest_timestamp !== null) {
+                    earliestTimestamp = new Date(instrument.earliest_timestamp).toLocaleString();
+                }
+                document.getElementById('earliestVegaTimestamp').innerText = earliestTimestamp;
+                document.getElementById('earliestThetaTimestamp').innerText = earliestTimestamp;
+
+                const currentTimestamp = new Date().toLocaleString();
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${currentTimestamp}</td>
+                        <td>${instrument.instrumentName}</td>
+                        <td>Calls</td>
+                        <td>${instrument.calls.vega_915.toFixed(2)}</td>
+                        <td>${instrument.calls.vega_current.toFixed(2)}</td>
+                        <td>${instrument.calls.vega_diff.toFixed(2)}</td>
+                        <td>${instrument.calls.theta_915.toFixed(2)}</td>
+                        <td>${instrument.calls.theta_current.toFixed(2)}</td>
+                        <td>${instrument.calls.theta_diff.toFixed(2)}</td>
+                    </tr>
+                    <tr>
+                        <td>${currentTimestamp}</td>
+                        <td>${instrument.instrumentName}</td>
+                        <td>Puts</td>
+                        <td>${instrument.puts.vega_915.toFixed(2)}</td>
+                        <td>${instrument.puts.vega_current.toFixed(2)}</td>
+                        <td>${instrument.puts.vega_diff.toFixed(2)}</td>
+                        <td>${instrument.puts.theta_915.toFixed(2)}</td>
+                        <td>${instrument.puts.theta_current.toFixed(2)}</td>
+                        <td>${instrument.puts.theta_diff.toFixed(2)}</td>
+                    </tr>
+                `;
+
+                summaryTbody.innerHTML += `
+                    <tr>
+                        <td>${currentTimestamp}</td>
+                        <td>${instrument.instrumentName}</td>
+                        <td>Calls</td>
+                        <td>${instrument.calls.vega_diff.toFixed(2)}</td>
+                        <td>${instrument.calls.theta_diff.toFixed(2)}</td>
+                    </tr>
+                    <tr>
+                        <td>${currentTimestamp}</td>
+                        <td>${instrument.instrumentName}</td>
+                        <td>Puts</td>
+                        <td>${instrument.puts.vega_diff.toFixed(2)}</td>
+                        <td>${instrument.puts.theta_diff.toFixed(2)}</td>
+                    </tr>
+                `;
+
+                // Update chart data
+                chartData.labels.push(currentTimestamp);
+                chartData.datasets[0].data.push(instrument.calls.vega_diff);
+                chartData.datasets[1].data.push(instrument.puts.vega_diff);
+            }
+
+            if (chart) {
+                chart.update();
+            }
+        }
+
+        function renderChart() {
+            const ctx = document.getElementById('vegaChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    title: {
+                        display: true,
+                        text: 'Delta Vega over Time'
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'minute'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Delta Vega'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        fetchData();
+        setInterval(fetchData, 5000);
+        renderChart();
+    </script>
+</body>
+</html>
